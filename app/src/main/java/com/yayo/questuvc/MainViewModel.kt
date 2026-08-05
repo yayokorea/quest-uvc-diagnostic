@@ -1,10 +1,13 @@
 package com.yayo.questuvc
 
+import android.Manifest
 import android.app.Application
 import android.app.PendingIntent
 import android.content.*
+import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
+import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
@@ -27,6 +30,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app), NativeUvc.Listene
     private var nativeHandle = 0L
     private var lastFrame: ByteArray? = null
     private var receiverRegistered = false
+    private var pendingCameraPermissionDeviceId: Int? = null
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -47,14 +51,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app), NativeUvc.Listene
     }
     fun refresh() {
         val devices=manager.deviceList.values.map { UsbDeviceInfo.from(it, manager.hasPermission(it)) }.sortedBy { it.name }
-        _state.value=_state.value.copy(devices=devices, phase=if(devices.isEmpty()) SessionPhase.DISCONNECTED else if(_state.value.phase==SessionPhase.DISCONNECTED) SessionPhase.DETECTED else _state.value.phase)
+        _state.value=_state.value.copy(devices=devices, cameraPermissionGranted=hasCameraPermission(), phase=if(devices.isEmpty()) SessionPhase.DISCONNECTED else if(_state.value.phase==SessionPhase.DISCONNECTED) SessionPhase.DETECTED else _state.value.phase)
     }
     fun select(deviceId:Int) {
         if (_state.value.selectedDeviceId != deviceId) closeSession(null)
         val d=manager.deviceList.values.firstOrNull { it.deviceId==deviceId } ?: return fail("Device disappeared")
         _state.value=_state.value.copy(selectedDeviceId=deviceId, phase=SessionPhase.DETECTED)
-        if (manager.hasPermission(d)) open(d) else requestPermission(d)
+        if (requiresCameraPermission(d) && !hasCameraPermission()) {
+            pendingCameraPermissionDeviceId=deviceId
+            _state.value=_state.value.copy(phase=SessionPhase.PERMISSION_PENDING,cameraPermissionRequired=true,cameraPermissionGranted=false)
+            log("Requesting Android camera permission (required for USB video devices)")
+            return
+        }
+        openOrRequestUsbPermission(d)
     }
+    fun onCameraPermissionResult(granted:Boolean) {
+        val deviceId=pendingCameraPermissionDeviceId
+        pendingCameraPermissionDeviceId=null
+        _state.value=_state.value.copy(cameraPermissionRequired=false,cameraPermissionGranted=granted)
+        if(!granted) return fail("Android camera permission denied; USB video permission cannot be granted")
+        log("Android camera permission granted")
+        val d=manager.deviceList.values.firstOrNull { it.deviceId==deviceId } ?: return fail("Device disappeared while requesting camera permission")
+        openOrRequestUsbPermission(d)
+    }
+    private fun openOrRequestUsbPermission(d:UsbDevice) { if (manager.hasPermission(d)) open(d) else requestPermission(d) }
+    private fun hasCameraPermission()=ContextCompat.checkSelfPermission(getApplication(),Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED
+    private fun requiresCameraPermission(d:UsbDevice)=d.deviceClass==UsbConstants.USB_CLASS_VIDEO || (0 until d.interfaceCount).any { d.getInterface(it).interfaceClass==UsbConstants.USB_CLASS_VIDEO }
     private fun requestPermission(d:UsbDevice) {
         _state.value=_state.value.copy(phase=SessionPhase.PERMISSION_PENDING); log("Requesting USB permission")
         val pi=PendingIntent.getBroadcast(getApplication(),0,Intent(ACTION_PERMISSION).setPackage(getApplication<Application>().packageName),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -104,7 +126,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app), NativeUvc.Listene
         file.writeText(buildReport()); return FileProvider.getUriForFile(getApplication(),"${getApplication<Application>().packageName}.files",file)
     }
     private fun buildReport():String=buildString { appendLine("Quest UVC Diagnostic report"); appendLine("Phase: ${_state.value.phase}"); appendLine("Device: ${_state.value.devices.firstOrNull { it.deviceId==_state.value.selectedDeviceId }}"); appendLine("Topology: ${_state.value.topology}"); appendLine("Mode: ${_state.value.selectedMode}"); appendLine("Statistics: ${_state.value.statistics}"); appendLine(); _state.value.events.forEach { appendLine("${it.timestampMs} ${it.level} ${it.message}") } }
-    private fun closeSession(reason:String?) { if(_state.value.phase==SessionPhase.STREAMING) runCatching { NativeUvc.stop(nativeHandle) }; closeTransport(); _state.value=DiagnosticState(devices=_state.value.devices,events=_state.value.events); reason?.let { log(it,"WARN") } }
+    private fun closeSession(reason:String?) { if(_state.value.phase==SessionPhase.STREAMING) runCatching { NativeUvc.stop(nativeHandle) }; closeTransport(); pendingCameraPermissionDeviceId=null; _state.value=DiagnosticState(devices=_state.value.devices,events=_state.value.events,cameraPermissionGranted=hasCameraPermission()); reason?.let { log(it,"WARN") } }
     private fun closeTransport() { if(nativeHandle>0) runCatching { NativeUvc.close(nativeHandle) }; nativeHandle=0L; connection?.close(); connection=null }
     private fun fail(message:String) { log(message,"ERROR"); _state.value=_state.value.copy(phase=SessionPhase.ERROR,busy=false) }
     private fun log(message:String,level:String="INFO") { _state.value=_state.value.copy(events=(_state.value.events+DiagnosticEvent(level=level,message=message)).takeLast(300)) }
