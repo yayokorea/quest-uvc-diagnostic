@@ -9,3 +9,7 @@ object NativeUvc {
     @JvmStatic external fun stop(handle: Long)
     @JvmStatic external fun close(handle: Long)
 }
+
+// arm64 tagged pointers can appear negative when represented as a signed Kotlin Long.
+// Native failures are libusb-style small negative values; every other non-zero value is a handle.
+internal fun isValidNativeHandle(value: Long) = value != 0L && value !in -4095L..-1L
