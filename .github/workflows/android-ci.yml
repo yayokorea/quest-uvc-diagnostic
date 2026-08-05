@@ -29,7 +29,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Restore Android SDK components
-        uses: actions/cache@v4
+        id: android-sdk-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             /usr/local/lib/android/sdk/platforms/android-35
@@ -52,6 +53,16 @@ jobs:
 
       - name: Test and assemble debug APK
         run: ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
+
+      - name: Save Android SDK components
+        if: success() && github.ref == 'refs/heads/main' && steps.android-sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/platforms/android-35
+            /usr/local/lib/android/sdk/ndk/27.2.12479018
+            /usr/local/lib/android/sdk/cmake/3.22.1
+          key: ${{ steps.android-sdk-cache.outputs.cache-primary-key }}
 
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
