@@ -19,6 +19,10 @@ android {
         externalNativeBuild { cmake { cppFlags += listOf("-std=c++17", "-Wall", "-Wextra") } }
     }
     buildFeatures { compose = true; buildConfig = true }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
     packaging { jniLibs.useLegacyPackaging = true }
     testOptions { unitTests.isIncludeAndroidResources = true }
