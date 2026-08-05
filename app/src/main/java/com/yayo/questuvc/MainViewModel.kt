@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbConstants
+import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
@@ -30,6 +31,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app), NativeUvc.Listene
     private val _state = MutableStateFlow(DiagnosticState())
     val state: StateFlow<DiagnosticState> = _state.asStateFlow()
     private var connection: UsbDeviceConnection? = null
+    private var claimedInterface: UsbInterface? = null
     private var nativeHandle = 0L
     private var lastFrame: ByteArray? = null
     private var receiverRegistered = false
@@ -111,9 +113,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app), NativeUvc.Listene
         val c=manager.openDevice(d) ?: return fail("UsbDeviceConnection open failed")
         val raw=c.rawDescriptors ?: ByteArray(0)
         val topology=runCatching { UvcDescriptorParser.parse(raw) }.getOrElse { c.close(); return fail("Descriptor parse failed: ${it.message}") }
+        val vsNumber=topology.videoStreamingInterfaces.firstOrNull() ?: run { c.close(); return fail("No VideoStreaming interface") }
+        val vsInterface=(0 until d.interfaceCount).map { d.getInterface(it) }.firstOrNull { it.id==vsNumber }
+            ?: run { c.close(); return fail("VideoStreaming interface $vsNumber is unavailable through Android USB API") }
+        if(!c.claimInterface(vsInterface,true)) { c.close(); return fail("Android force-claim failed for VideoStreaming interface $vsNumber") }
         connection=c
+        claimedInterface=vsInterface
+        log("Android force-claimed VideoStreaming interface $vsNumber")
         nativeHandle=runCatching { NativeUvc.open(c.fileDescriptor,raw,this) }.getOrElse { -1L }
-        if(!isValidNativeHandle(nativeHandle)) { c.close(); connection=null; return fail("Native libusb wrap failed ($nativeHandle)") }
+        if(!isValidNativeHandle(nativeHandle)) { c.releaseInterface(vsInterface); c.close(); connection=null; claimedInterface=null; return fail("Native libusb wrap failed ($nativeHandle)") }
         val recommended=topology.modes.filter { it.format==VideoFormat.MJPEG && it.intervals100ns.isNotEmpty() }.minByOrNull { it.width.toLong()*it.height }
             ?: topology.modes.firstOrNull()
         _state.value=_state.value.copy(phase=SessionPhase.PARSED,topology=topology,selectedMode=recommended,selectedInterval=recommended?.intervals100ns?.maxOrNull(),probeResult="Not attempted")
@@ -151,7 +159,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app), NativeUvc.Listene
     }
     private fun buildReport():String=buildString { appendLine("Quest UVC Diagnostic report"); appendLine("Phase: ${_state.value.phase}"); appendLine("Device: ${_state.value.devices.firstOrNull { it.deviceId==_state.value.selectedDeviceId }}"); appendLine("Topology: ${_state.value.topology}"); appendLine("Mode: ${_state.value.selectedMode}"); appendLine("Statistics: ${_state.value.statistics}"); appendLine(); _state.value.events.forEach { appendLine("${it.timestampMs} ${it.level} ${it.message}") } }
     private fun closeSession(reason:String?) { if(_state.value.phase==SessionPhase.STREAMING) runCatching { NativeUvc.stop(nativeHandle) }; closeTransport(); pendingCameraPermissionDeviceId=null; val horizonAvailable=isHorizonUsbCameraPermissionAvailable(); _state.value=DiagnosticState(devices=_state.value.devices,events=_state.value.events,cameraPermissionGranted=hasCameraPermission(),horizonUsbCameraPermissionAvailable=horizonAvailable,horizonUsbCameraPermissionGranted=horizonAvailable&&hasHorizonUsbCameraPermission()); reason?.let { log(it,"WARN") } }
-    private fun closeTransport() { if(isValidNativeHandle(nativeHandle)) runCatching { NativeUvc.close(nativeHandle) }; nativeHandle=0L; connection?.close(); connection=null }
+    private fun closeTransport() { if(isValidNativeHandle(nativeHandle)) runCatching { NativeUvc.close(nativeHandle) }; nativeHandle=0L; claimedInterface?.let { intf->runCatching { connection?.releaseInterface(intf) } }; claimedInterface=null; connection?.close(); connection=null }
     private fun fail(message:String) { log(message,"ERROR"); _state.value=_state.value.copy(phase=SessionPhase.ERROR,busy=false) }
     private fun log(message:String,level:String="INFO") { _state.value=_state.value.copy(events=(_state.value.events+DiagnosticEvent(level=level,message=message)).takeLast(300)) }
     override fun onCleared() { if(receiverRegistered) getApplication<Application>().unregisterReceiver(receiver); closeTransport() }
