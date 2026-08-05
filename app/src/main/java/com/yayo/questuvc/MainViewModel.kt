@@ -22,7 +22,10 @@ import java.io.File
 import java.util.Locale
 
 class MainViewModel(app: Application) : AndroidViewModel(app), NativeUvc.Listener {
-    companion object { const val ACTION_PERMISSION = "com.yayo.questuvc.USB_PERMISSION" }
+    companion object {
+        const val ACTION_PERMISSION = "com.yayo.questuvc.USB_PERMISSION"
+        const val HORIZON_USB_CAMERA_PERMISSION = "horizonos.permission.USB_CAMERA"
+    }
     private val manager = app.getSystemService(UsbManager::class.java)
     private val _state = MutableStateFlow(DiagnosticState())
     val state: StateFlow<DiagnosticState> = _state.asStateFlow()
@@ -51,7 +54,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app), NativeUvc.Listene
     }
     fun refresh() {
         val devices=manager.deviceList.values.map { UsbDeviceInfo.from(it, manager.hasPermission(it)) }.sortedBy { it.name }
-        _state.value=_state.value.copy(devices=devices, cameraPermissionGranted=hasCameraPermission(), phase=if(devices.isEmpty()) SessionPhase.DISCONNECTED else if(_state.value.phase==SessionPhase.DISCONNECTED) SessionPhase.DETECTED else _state.value.phase)
+        val horizonAvailable=isHorizonUsbCameraPermissionAvailable()
+        _state.value=_state.value.copy(devices=devices, cameraPermissionGranted=hasCameraPermission(), horizonUsbCameraPermissionAvailable=horizonAvailable, horizonUsbCameraPermissionGranted=horizonAvailable&&hasHorizonUsbCameraPermission(), phase=if(devices.isEmpty()) SessionPhase.DISCONNECTED else if(_state.value.phase==SessionPhase.DISCONNECTED) SessionPhase.DETECTED else _state.value.phase)
     }
     fun select(deviceId:Int) {
         if (_state.value.selectedDeviceId != deviceId) closeSession(null)
@@ -63,7 +67,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app), NativeUvc.Listene
             log("Requesting Android camera permission (required for USB video devices)")
             return
         }
-        openOrRequestUsbPermission(d)
+        continuePermissionFlow(d)
     }
     fun onCameraPermissionResult(granted:Boolean) {
         val deviceId=pendingCameraPermissionDeviceId
@@ -72,10 +76,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app), NativeUvc.Listene
         if(!granted) return fail("Android camera permission denied; USB video permission cannot be granted")
         log("Android camera permission granted")
         val d=manager.deviceList.values.firstOrNull { it.deviceId==deviceId } ?: return fail("Device disappeared while requesting camera permission")
+        continuePermissionFlow(d)
+    }
+    fun onHorizonUsbCameraPermissionResult(granted:Boolean) {
+        val deviceId=pendingCameraPermissionDeviceId
+        pendingCameraPermissionDeviceId=null
+        _state.value=_state.value.copy(horizonUsbCameraPermissionRequired=false,horizonUsbCameraPermissionGranted=granted)
+        if(!granted) return fail("Horizon OS USB camera permission denied; allow this app in the headset's Connected camera app permissions settings")
+        log("Horizon OS USB camera permission granted")
+        val d=manager.deviceList.values.firstOrNull { it.deviceId==deviceId } ?: return fail("Device disappeared while requesting Horizon USB camera permission")
+        openOrRequestUsbPermission(d)
+    }
+    private fun continuePermissionFlow(d:UsbDevice) {
+        if(isHorizonUsbCameraPermissionAvailable()&&!hasHorizonUsbCameraPermission()) {
+            pendingCameraPermissionDeviceId=d.deviceId
+            _state.value=_state.value.copy(phase=SessionPhase.PERMISSION_PENDING,horizonUsbCameraPermissionRequired=true,horizonUsbCameraPermissionAvailable=true,horizonUsbCameraPermissionGranted=false)
+            log("Requesting Horizon OS external USB camera permission")
+            return
+        }
         openOrRequestUsbPermission(d)
     }
     private fun openOrRequestUsbPermission(d:UsbDevice) { if (manager.hasPermission(d)) open(d) else requestPermission(d) }
     private fun hasCameraPermission()=ContextCompat.checkSelfPermission(getApplication(),Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED
+    @Suppress("DEPRECATION") private fun isHorizonUsbCameraPermissionAvailable()=runCatching { getApplication<Application>().packageManager.getPermissionInfo(HORIZON_USB_CAMERA_PERMISSION,0) }.isSuccess
+    private fun hasHorizonUsbCameraPermission()=ContextCompat.checkSelfPermission(getApplication(),HORIZON_USB_CAMERA_PERMISSION)==PackageManager.PERMISSION_GRANTED
     private fun requiresCameraPermission(d:UsbDevice)=d.deviceClass==UsbConstants.USB_CLASS_VIDEO || (0 until d.interfaceCount).any { d.getInterface(it).interfaceClass==UsbConstants.USB_CLASS_VIDEO }
     private fun requestPermission(d:UsbDevice) {
         _state.value=_state.value.copy(phase=SessionPhase.PERMISSION_PENDING); log("Requesting USB permission")
@@ -126,7 +150,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app), NativeUvc.Listene
         file.writeText(buildReport()); return FileProvider.getUriForFile(getApplication(),"${getApplication<Application>().packageName}.files",file)
     }
     private fun buildReport():String=buildString { appendLine("Quest UVC Diagnostic report"); appendLine("Phase: ${_state.value.phase}"); appendLine("Device: ${_state.value.devices.firstOrNull { it.deviceId==_state.value.selectedDeviceId }}"); appendLine("Topology: ${_state.value.topology}"); appendLine("Mode: ${_state.value.selectedMode}"); appendLine("Statistics: ${_state.value.statistics}"); appendLine(); _state.value.events.forEach { appendLine("${it.timestampMs} ${it.level} ${it.message}") } }
-    private fun closeSession(reason:String?) { if(_state.value.phase==SessionPhase.STREAMING) runCatching { NativeUvc.stop(nativeHandle) }; closeTransport(); pendingCameraPermissionDeviceId=null; _state.value=DiagnosticState(devices=_state.value.devices,events=_state.value.events,cameraPermissionGranted=hasCameraPermission()); reason?.let { log(it,"WARN") } }
+    private fun closeSession(reason:String?) { if(_state.value.phase==SessionPhase.STREAMING) runCatching { NativeUvc.stop(nativeHandle) }; closeTransport(); pendingCameraPermissionDeviceId=null; val horizonAvailable=isHorizonUsbCameraPermissionAvailable(); _state.value=DiagnosticState(devices=_state.value.devices,events=_state.value.events,cameraPermissionGranted=hasCameraPermission(),horizonUsbCameraPermissionAvailable=horizonAvailable,horizonUsbCameraPermissionGranted=horizonAvailable&&hasHorizonUsbCameraPermission()); reason?.let { log(it,"WARN") } }
     private fun closeTransport() { if(isValidNativeHandle(nativeHandle)) runCatching { NativeUvc.close(nativeHandle) }; nativeHandle=0L; connection?.close(); connection=null }
     private fun fail(message:String) { log(message,"ERROR"); _state.value=_state.value.copy(phase=SessionPhase.ERROR,busy=false) }
     private fun log(message:String,level:String="INFO") { _state.value=_state.value.copy(events=(_state.value.events+DiagnosticEvent(level=level,message=message)).takeLast(300)) }
