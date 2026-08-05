@@ -28,6 +28,15 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Restore Android SDK components
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/platforms/android-35
+            /usr/local/lib/android/sdk/ndk/27.2.12479018
+            /usr/local/lib/android/sdk/cmake/3.22.1
+          key: android-sdk-linux-api35-ndk27.2.12479018-cmake3.22.1-v1
+
       - name: Ensure Android SDK components
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
