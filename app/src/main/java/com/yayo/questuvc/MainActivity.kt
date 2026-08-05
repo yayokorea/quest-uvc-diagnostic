@@ -31,7 +31,10 @@ class MainActivity : ComponentActivity() {
 }
 
 private val DarkColors=darkColorScheme(primary=Color(0xFF62D7C8),secondary=Color(0xFFA9C7FF),surface=Color(0xFF101716),surfaceVariant=Color(0xFF263331),error=Color(0xFFFFB4AB))
-@Composable private fun QuestTheme(content:@Composable()->Unit)=MaterialTheme(colorScheme=DarkColors,typography=Typography(),content=content)
+@Composable
+private fun QuestTheme(content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = DarkColors, typography = Typography(), content = content)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun DiagnosticScreen(vm:MainViewModel) {
