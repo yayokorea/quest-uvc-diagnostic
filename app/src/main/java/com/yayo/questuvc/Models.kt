@@ -47,5 +47,6 @@ data class DiagnosticState(
     val topology: UvcTopology? = null, val selectedMode: UvcStreamMode? = null,
     val selectedInterval: Long? = null, val probeResult: String = "Not attempted",
     val statistics: StreamStatistics = StreamStatistics(), val previewJpeg: ByteArray? = null,
-    val events: List<DiagnosticEvent> = emptyList(), val busy: Boolean = false
+    val events: List<DiagnosticEvent> = emptyList(), val busy: Boolean = false,
+    val cameraPermissionRequired: Boolean = false, val cameraPermissionGranted: Boolean = false
 )

@@ -1,11 +1,14 @@
 package com.yayo.questuvc
 
+import android.Manifest
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -39,6 +42,8 @@ private fun QuestTheme(content: @Composable () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun DiagnosticScreen(vm:MainViewModel) {
     val s by vm.state.collectAsStateWithLifecycle(); val context=androidx.compose.ui.platform.LocalContext.current
+    val cameraPermissionLauncher=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission(),vm::onCameraPermissionResult)
+    LaunchedEffect(s.cameraPermissionRequired) { if(s.cameraPermissionRequired) cameraPermissionLauncher.launch(Manifest.permission.CAMERA) }
     Scaffold(topBar={ TopAppBar(title={ Text("Quest UVC Diagnostic") },actions={ TextButton(onClick={vm.refresh()}){Text("Refresh")}; TextButton(onClick={ val uri=vm.reportUri(); context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type="text/plain"; putExtra(Intent.EXTRA_STREAM,uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) },"Share diagnostic report")) }){Text("Share report")} }) }) { padding ->
         Row(Modifier.fillMaxSize().padding(padding).padding(12.dp),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
             LazyColumn(Modifier.weight(0.42f).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(10.dp)) {
@@ -58,7 +63,7 @@ private fun QuestTheme(content: @Composable () -> Unit) {
 
 @Composable private fun Section(title:String,content:@Composable ColumnScope.()->Unit) { ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) { Text(title,style=MaterialTheme.typography.titleMedium,color=MaterialTheme.colorScheme.primary); content() } } }
 @Composable private fun StatusCard(s:DiagnosticState)=Section("Compatibility status") {
-    val rows=listOf("Device detected" to (s.devices.isNotEmpty()).yn(),"USB permission" to (s.devices.firstOrNull{it.deviceId==s.selectedDeviceId}?.permission==true).granted(),"UVC interface" to (s.topology?.videoStreamingInterfaces?.isNotEmpty()==true).found(),"Probe / Commit" to s.probeResult,"Streaming" to if(s.phase==SessionPhase.STREAMING) "Active" else s.phase.name)
+    val rows=listOf("Device detected" to (s.devices.isNotEmpty()).yn(),"Android camera permission" to s.cameraPermissionGranted.granted(),"USB permission" to (s.devices.firstOrNull{it.deviceId==s.selectedDeviceId}?.permission==true).granted(),"UVC interface" to (s.topology?.videoStreamingInterfaces?.isNotEmpty()==true).found(),"Probe / Commit" to s.probeResult,"Streaming" to if(s.phase==SessionPhase.STREAMING) "Active" else s.phase.name)
     rows.forEach { (a,b)->KeyValue(a,b) }
 }
 @Composable private fun DeviceRow(d:UsbDeviceInfo,selected:Boolean,onClick:()->Unit) { Surface(onClick=onClick,color=if(selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,shape=RoundedCornerShape(10.dp),modifier=Modifier.fillMaxWidth()) { Column(Modifier.padding(10.dp)) { Text(d.product ?: d.name,style=MaterialTheme.typography.titleSmall); Text("VID:PID %04X:%04X · ${d.manufacturer ?: "Unknown maker"}".format(d.vid,d.pid),style=MaterialTheme.typography.bodySmall); Text("Serial ${d.serial ?: "(permission required/unavailable)"} · class ${d.deviceClass}/${d.subclass}/${d.protocol}",style=MaterialTheme.typography.bodySmall) } } }
