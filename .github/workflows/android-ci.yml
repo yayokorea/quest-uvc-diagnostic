@@ -29,7 +29,11 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Ensure Android SDK components
-        run: "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "ndk;27.2.12479018" "cmake;3.22.1"
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" \
+            "ndk;27.2.12479018" \
+            "cmake;3.22.1"
 
       - name: Validate Gradle wrapper
         uses: gradle/actions/wrapper-validation@v4
